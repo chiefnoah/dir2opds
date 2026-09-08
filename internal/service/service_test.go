@@ -126,6 +126,9 @@ func TestMixedDirectoryFeeds(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(root, "section"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "book.pdf"), []byte("PDF"), 0o644))
+	mixed := filepath.Join(root, "section", "mixed")
+	require.NoError(t, os.MkdirAll(filepath.Join(mixed, "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(mixed, "book.pdf"), []byte("PDF"), 0o644))
 
 	tests := map[string]struct {
 		url         string
@@ -145,6 +148,11 @@ func TestMixedDirectoryFeeds(t *testing.T) {
 			contentType: "application/atom+xml;profile=opds-catalog;kind=acquisition",
 			contains:    []string{`href="/book.pdf"`, `rel="up" href="/"`},
 			excludes:    []string{`href="/section"`},
+		},
+		"mixed directory link": {
+			url:         "/section",
+			contentType: "application/atom+xml;profile=opds-catalog;kind=navigation",
+			contains:    []string{`rel="subsection" href="/section/mixed"`},
 		},
 		"KOReader mixed": {
 			url:         "/",

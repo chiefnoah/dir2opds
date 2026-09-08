@@ -1292,7 +1292,7 @@ func fileShouldBeIgnored(filename string, hideCalibreFiles, hideDotFiles bool) b
 }
 
 func getRel(name string, pathType int) string {
-	if pathType == pathTypeDirOfFiles || pathType == pathTypeDirOfDirs {
+	if pathType == pathTypeDirOfFiles || pathType == pathTypeDirOfDirs || pathType == pathTypeDirMixed {
 		return "subsection"
 	}
 
