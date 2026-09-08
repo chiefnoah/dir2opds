@@ -122,6 +122,62 @@ func TestScan(t *testing.T) {
 	})
 }
 
+func TestMixedDirectoryFeeds(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, "section"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "book.pdf"), []byte("PDF"), 0o644))
+
+	tests := map[string]struct {
+		url         string
+		mixed       bool
+		contentType string
+		contains    []string
+		excludes    []string
+	}{
+		"standards navigation": {
+			url:         "/",
+			contentType: "application/atom+xml;profile=opds-catalog;kind=navigation",
+			contains:    []string{`href="/section"`, `href="/?view=books"`, "Books in this folder"},
+			excludes:    []string{`href="/book.pdf"`},
+		},
+		"standards books": {
+			url:         "/?view=books",
+			contentType: "application/atom+xml;profile=opds-catalog;kind=acquisition",
+			contains:    []string{`href="/book.pdf"`, `rel="up" href="/"`},
+			excludes:    []string{`href="/section"`},
+		},
+		"KOReader mixed": {
+			url:         "/",
+			mixed:       true,
+			contentType: "application/atom+xml;profile=opds-catalog;kind=navigation",
+			contains:    []string{`href="/section"`, `href="/book.pdf"`},
+			excludes:    []string{"Books in this folder", `view=books`},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			s := service.OPDS{TrustedRoot: root, KOReaderMixed: tc.mixed}
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+
+			err := s.Handler(w, req)
+			require.NoError(t, err)
+
+			resp := w.Result()
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Equal(t, tc.contentType, resp.Header.Get("Content-Type"))
+			for _, expected := range tc.contains {
+				assert.Contains(t, string(body), expected)
+			}
+			for _, excluded := range tc.excludes {
+				assert.NotContains(t, string(body), excluded)
+			}
+		})
+	}
+}
+
 func TestBaseURL(t *testing.T) {
 	s := service.OPDS{
 		TrustedRoot: "testdata",

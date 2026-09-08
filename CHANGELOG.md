@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Support mixed book and subfolder directories through separate OPDS feeds.
+- Add optional KOReader-specific mixed feeds.
+- Add on-demand PDF first-page covers with a configurable disk cache.
+
 ## [1.11.0] - 2026-09-04
 
 ### Added

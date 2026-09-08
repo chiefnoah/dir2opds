@@ -25,30 +25,40 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/dubyte/dir2opds/internal/service"
 )
 
 var (
-	port             = flag.String("port", "8080", "The server will listen in this port.")
-	host             = flag.String("host", "0.0.0.0", "The server will listen in this host.")
-	dirRoot          = flag.String("dir", "./books", "A directory with books.")
-	debug            = flag.Bool("debug", false, "If it is set it will log the requests.")
-	hideCalibreFiles = flag.Bool("hide-calibre-files", true, "Hide files stored by calibre.")
-	hideDotFiles     = flag.Bool("hide-dot-files", true, "Hide files that starts with dot.")
-	noCache          = flag.Bool("no-cache", false, "adds reponse headers to avoid client from caching.")
-	enableCache      = flag.Bool("enable-cache", false, "Enable ETag and Last-Modified headers for conditional requests.")
-	gzip             = flag.Bool("gzip", false, "Enable gzip compression for responses.")
-	sortBy           = flag.String("sort", "name", "Sort entries by: name, date, size.")
-	showCovers       = flag.Bool("show-covers", true, "Show cover.jpg or folder.jpg as catalog cover.")
-	mimeMapStr       = flag.String("mime-map", "", "Custom mime types (e.g., '.mobi:application/x-mobipocket-ebook,.azw3:application/vnd.amazon.ebook')")
-	searchEnable     = flag.Bool("search", false, "Enable basic filename search.")
-	extractMeta      = flag.Bool("extract-metadata", true, "Extract metadata (title, author, cover) from EPUB and PDF files.")
-	enableHTML       = flag.Bool("enable-html", false, "Enable web-friendly HTML view for browsers.")
-	baseURL          = flag.String("url", "", "The base URL used for absolute links in the feed (e.g., https://opds.example.com).")
-	logFormat        = flag.String("log-format", "json", "Log format: json, text.")
-	pageSize         = flag.Int("page-size", 50, "Number of entries per page (0 for default, max 200).")
-	noPagination     = flag.Bool("no-pagination", false, "Disable pagination and show all entries in a single feed.")
+	port               = flag.String("port", "8080", "The server will listen in this port.")
+	host               = flag.String("host", "0.0.0.0", "The server will listen in this host.")
+	dirRoot            = flag.String("dir", "./books", "A directory with books.")
+	debug              = flag.Bool("debug", false, "If it is set it will log the requests.")
+	hideCalibreFiles   = flag.Bool("hide-calibre-files", true, "Hide files stored by calibre.")
+	hideDotFiles       = flag.Bool("hide-dot-files", true, "Hide files that starts with dot.")
+	noCache            = flag.Bool("no-cache", false, "adds reponse headers to avoid client from caching.")
+	enableCache        = flag.Bool("enable-cache", false, "Enable ETag and Last-Modified headers for conditional requests.")
+	gzip               = flag.Bool("gzip", false, "Enable gzip compression for responses.")
+	sortBy             = flag.String("sort", "name", "Sort entries by: name, date, size.")
+	showCovers         = flag.Bool("show-covers", true, "Show cover.jpg or folder.jpg as catalog cover.")
+	mimeMapStr         = flag.String("mime-map", "", "Custom mime types (e.g., '.mobi:application/x-mobipocket-ebook,.azw3:application/vnd.amazon.ebook')")
+	searchEnable       = flag.Bool("search", false, "Enable basic filename search.")
+	extractMeta        = flag.Bool("extract-metadata", true, "Extract metadata (title, author, cover) from EPUB and PDF files.")
+	enableHTML         = flag.Bool("enable-html", false, "Enable web-friendly HTML view for browsers.")
+	baseURL            = flag.String("url", "", "The base URL used for absolute links in the feed (e.g., https://opds.example.com).")
+	logFormat          = flag.String("log-format", "json", "Log format: json, text.")
+	pageSize           = flag.Int("page-size", 50, "Number of entries per page (0 for default, max 200).")
+	noPagination       = flag.Bool("no-pagination", false, "Disable pagination and show all entries in a single feed.")
+	koreaderMixed      = flag.Bool("koreader-mixed-feeds", false, "List folders and books together for KOReader.")
+	pdfCovers          = flag.Bool("pdf-covers", false, "Render the first PDF page as a cover.")
+	pdfCoverCache      = flag.String("pdf-cover-cache-dir", "./cover-cache", "Directory for generated PDF covers.")
+	pdfCoverCommand    = flag.String("pdf-cover-command", "pdftoppm", "Poppler pdftoppm executable.")
+	pdfCoverWidth      = flag.Int("pdf-cover-width", 320, "PDF cover width in pixels.")
+	pdfCoverQuality    = flag.Int("pdf-cover-quality", 80, "PDF cover JPEG quality from 1 to 100.")
+	pdfCoverWorkers    = flag.Int("pdf-cover-workers", 2, "Maximum concurrent PDF cover renders.")
+	pdfCoverTimeout    = flag.Duration("pdf-cover-timeout", 30*time.Second, "Maximum PDF cover render duration.")
+	pdfCoverFailureTTL = flag.Duration("pdf-cover-failure-ttl", 5*time.Minute, "Cache failed PDF renders for this duration.")
 
 	// Will be deprecated in a future version; use -hide-calibre-files instead
 	calibre = flag.Bool("calibre", true, "Hide files stored by calibre. Will be deprecated; use -hide-calibre-files.")
@@ -109,6 +119,24 @@ func main() {
 		hideCalibre = *calibre
 	}
 
+	var covers *service.PDFCovers
+	if *pdfCovers {
+		covers, err = service.NewPDFCovers(service.PDFCoverConfig{
+			BookRoot:   absolutePath,
+			CacheDir:   *pdfCoverCache,
+			Command:    *pdfCoverCommand,
+			Width:      *pdfCoverWidth,
+			Quality:    *pdfCoverQuality,
+			Workers:    *pdfCoverWorkers,
+			Timeout:    *pdfCoverTimeout,
+			FailureTTL: *pdfCoverFailureTTL,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", err)
+			os.Exit(1)
+		}
+	}
+
 	s := service.OPDS{
 		TrustedRoot:      absolutePath,
 		HideCalibreFiles: hideCalibre,
@@ -124,6 +152,8 @@ func main() {
 		BaseURL:          *baseURL,
 		PageSize:         *pageSize,
 		NoPagination:     *noPagination,
+		KOReaderMixed:    *koreaderMixed,
+		PDFCovers:        covers,
 	}
 
 	http.HandleFunc("/", errorHandler(s.Handler))
@@ -132,7 +162,7 @@ func main() {
 		http.HandleFunc("/search", errorHandler(s.SearchHandler))
 		http.HandleFunc("/opensearch.xml", s.OpenSearchHandler)
 	}
-	if *extractMeta {
+	if *extractMeta || *pdfCovers {
 		http.HandleFunc("/cover", errorHandler(s.CoverHandler))
 	}
 

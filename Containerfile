@@ -8,5 +8,6 @@ RUN go build -o /app/dir2opds
 
 # Stage 2: Final Image
 FROM docker.io/alpine
+RUN apk add --no-cache poppler-utils
 COPY --from=builder /app/dir2opds /dir2opds
 ENTRYPOINT ["/dir2opds"]

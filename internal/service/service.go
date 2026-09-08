@@ -42,6 +42,7 @@ const (
 	pathTypeFile = iota
 	pathTypeDirOfDirs
 	pathTypeDirOfFiles
+	pathTypeDirMixed
 )
 
 const (
@@ -72,6 +73,8 @@ type OPDS struct {
 	BaseURL          string
 	PageSize         int
 	NoPagination     bool
+	KOReaderMixed    bool
+	PDFCovers        *PDFCovers
 }
 
 type Catalog struct {
@@ -98,6 +101,8 @@ type CatalogEntry struct {
 	Series      string
 	SeriesIndex string
 	Subjects    []string
+	Href        string
+	ID          string
 }
 
 type IsDirer interface {
@@ -110,7 +115,15 @@ func isFile(e IsDirer) bool {
 
 const navigationType = "application/atom+xml;profile=opds-catalog;kind=navigation"
 
+const (
+	acquisitionType = "application/atom+xml;profile=opds-catalog;kind=acquisition"
+	booksView       = "books"
+	booksTitle      = "Books in this folder"
+)
+
 var TimeNow = timeNowFunc()
+
+var errPDFCoverUnavailable = errors.New("PDF cover unavailable")
 
 // Scan inspects the directory and builds a Catalog model
 func (s OPDS) pageSize() int {
@@ -161,6 +174,16 @@ func etag(urlPath string, modTime time.Time, page int) string {
 }
 
 func (s OPDS) Scan(fPath string, urlPath string, page int) (*Catalog, error) {
+	catalog, err := s.scan(fPath, urlPath)
+	if err != nil {
+		return nil, err
+	}
+
+	s.paginate(catalog, page)
+	return catalog, nil
+}
+
+func (s OPDS) scan(fPath string, urlPath string) (*Catalog, error) {
 	dirEntries, err := os.ReadDir(fPath)
 	if err != nil {
 		return nil, err
@@ -174,9 +197,10 @@ func (s OPDS) Scan(fPath string, urlPath string, page int) (*Catalog, error) {
 	catalog := &Catalog{
 		ID:      urlPath,
 		Title:   "Catalog in " + urlPath,
-		Type:    getPathType(fPath),
 		ModTime: dirInfo.ModTime(),
 	}
+	hasDirs := false
+	hasFiles := false
 
 	for _, entry := range dirEntries {
 		if fileShouldBeIgnored(entry.Name(), s.HideCalibreFiles, s.HideDotFiles) {
@@ -195,9 +219,17 @@ func (s OPDS) Scan(fPath string, urlPath string, page int) (*Catalog, error) {
 			continue
 		}
 
+		entryType := pathTypeFile
+		if entry.IsDir() {
+			entryType = s.getPathType(entryPath)
+			hasDirs = true
+		} else {
+			hasFiles = true
+		}
+
 		catalog.Entries = append(catalog.Entries, CatalogEntry{
 			Name:    entry.Name(),
-			Type:    getPathType(entryPath),
+			Type:    entryType,
 			ModTime: info.ModTime(),
 			Size:    info.Size(),
 		})
@@ -231,10 +263,18 @@ func (s OPDS) Scan(fPath string, urlPath string, page int) (*Catalog, error) {
 				catalog.Entries[idx].Subjects = subjects
 			}
 		}
+
+		if s.PDFCovers != nil && strings.EqualFold(filepath.Ext(entry.Name()), ".pdf") {
+			catalog.Entries[len(catalog.Entries)-1].CoverPath = ".jpg"
+		}
 	}
 
+	catalog.Type = directoryType(hasDirs, hasFiles)
 	s.sortEntries(catalog.Entries)
+	return catalog, nil
+}
 
+func (s OPDS) paginate(catalog *Catalog, page int) {
 	total := len(catalog.Entries)
 	pageSize := s.pageSize()
 	if page < 1 {
@@ -262,8 +302,16 @@ func (s OPDS) Scan(fPath string, urlPath string, page int) (*Catalog, error) {
 	catalog.Page = page
 	catalog.PageSize = pageSize
 	catalog.Entries = catalog.Entries[start:end]
+}
 
-	return catalog, nil
+func directoryType(hasDirs, hasFiles bool) int {
+	if hasDirs && hasFiles {
+		return pathTypeDirMixed
+	}
+	if hasFiles {
+		return pathTypeDirOfFiles
+	}
+	return pathTypeDirOfDirs
 }
 
 func extractMetadata(path string) (string, string, string, string, string, string, []string) {
@@ -607,16 +655,15 @@ func (s OPDS) Handler(w http.ResponseWriter, req *http.Request) error {
 		return nil
 	}
 
-	if _, err := os.Stat(fPath); err != nil {
+	fileInfo, err := os.Stat(fPath)
+	if err != nil {
 		slog.Error("file system stat error", "error", err)
 		w.WriteHeader(http.StatusNotFound)
 		return nil
 	}
 
-	pathType := getPathType(fPath)
-
 	// it's a file just serve the file
-	if pathType == pathTypeFile {
+	if !fileInfo.IsDir() {
 		http.ServeFile(w, req, fPath)
 		return nil
 	}
@@ -637,11 +684,33 @@ func (s OPDS) Handler(w http.ResponseWriter, req *http.Request) error {
 		s.NoPagination = true
 	}
 
-	catalog, err := s.Scan(fPath, urlPath, page)
+	catalog, err := s.scan(fPath, urlPath)
 	if err != nil {
 		slog.Error("error scanning path", "error", err)
 		return err
 	}
+
+	if catalog.Type == pathTypeDirMixed && !s.KOReaderMixed {
+		if req.URL.Query().Get("view") == booksView {
+			catalog.Title = booksTitle
+			catalog.Type = pathTypeDirOfFiles
+			catalog.Entries = filterEntries(catalog.Entries, pathTypeFile)
+		} else {
+			catalog.Type = pathTypeDirOfDirs
+			catalog.Entries = filterDirectories(catalog.Entries)
+			catalog.Entries = append(catalog.Entries, CatalogEntry{
+				Name:    booksTitle,
+				Title:   booksTitle,
+				Type:    pathTypeDirOfFiles,
+				ModTime: catalog.ModTime,
+				Href:    buildViewURL(req.URL.Path, booksView),
+				ID:      buildViewURL(req.URL.Path, booksView),
+			})
+			s.sortEntries(catalog.Entries)
+		}
+	}
+
+	s.paginate(catalog, page)
 
 	slog.Debug("request",
 		"urlPath", urlPath,
@@ -652,7 +721,7 @@ func (s OPDS) Handler(w http.ResponseWriter, req *http.Request) error {
 	)
 
 	if s.EnableCache {
-		eTag := etag(urlPath, catalog.ModTime, page)
+		eTag := etag(req.URL.RequestURI(), catalog.ModTime, page)
 		lastModified := catalog.ModTime.UTC()
 
 		w.Header().Set("ETag", eTag)
@@ -687,7 +756,7 @@ func (s OPDS) Handler(w http.ResponseWriter, req *http.Request) error {
 		navFeed.Opds = "http://opds-spec.org/2010/catalog"
 		acFeed := &opds.AcquisitionFeed{Feed: &navFeed, Dc: "http://purl.org/dc/terms/"}
 		content, err = xml.MarshalIndent(acFeed, "  ", "    ")
-		w.Header().Add("Content-Type", "application/atom+xml;profile=opds-catalog;kind=acquisition")
+		w.Header().Add("Content-Type", acquisitionType)
 	} else { // it is a navigation feed
 		navFeed.Opds = "http://opds-spec.org/2010/catalog"
 		content, err = xml.MarshalIndent(navFeed, "  ", "    ")
@@ -702,6 +771,32 @@ func (s OPDS) Handler(w http.ResponseWriter, req *http.Request) error {
 	http.ServeContent(w, req, "feed.xml", TimeNow(), bytes.NewReader(content))
 
 	return nil
+}
+
+func filterEntries(entries []CatalogEntry, entryType int) []CatalogEntry {
+	filtered := make([]CatalogEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Type == entryType {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+func filterDirectories(entries []CatalogEntry) []CatalogEntry {
+	filtered := make([]CatalogEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Type != pathTypeFile {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+func buildViewURL(urlPath, view string) string {
+	query := url.Values{}
+	query.Set("view", view)
+	return urlPath + "?" + query.Encode()
 }
 
 // SearchHandler performs a basic filename search
@@ -774,12 +869,12 @@ func (s OPDS) SearchHandler(w http.ResponseWriter, req *http.Request) error {
 	}
 
 	navFeed := s.makeFeed(catalog, req)
-		navFeed.Opds = "http://opds-spec.org/2010/catalog"
-		acFeed := &opds.AcquisitionFeed{Feed: &navFeed, Dc: "http://purl.org/dc/terms/"}
-		content, err := xml.MarshalIndent(acFeed, "  ", "    ")
-		if err != nil {
-			return err
-		}
+	navFeed.Opds = "http://opds-spec.org/2010/catalog"
+	acFeed := &opds.AcquisitionFeed{Feed: &navFeed, Dc: "http://purl.org/dc/terms/"}
+	content, err := xml.MarshalIndent(acFeed, "  ", "    ")
+	if err != nil {
+		return err
+	}
 
 	w.Header().Add("Content-Type", "application/atom+xml;profile=opds-catalog;kind=acquisition")
 	content = append([]byte(xml.Header), content...)
@@ -809,7 +904,7 @@ func (s OPDS) joinURL(p string) string {
 	return strings.TrimSuffix(s.BaseURL, "/") + "/" + strings.TrimPrefix(p, "/")
 }
 
-// CoverHandler extracts and serves cover images from EPUB files
+// CoverHandler extracts and serves publication cover images.
 func (s OPDS) CoverHandler(w http.ResponseWriter, req *http.Request) error {
 	filePath := req.URL.Query().Get("file")
 	if filePath == "" {
@@ -832,9 +927,43 @@ func (s OPDS) CoverHandler(w http.ResponseWriter, req *http.Request) error {
 		return nil
 	}
 
-	if _, err := os.Stat(fPath); err != nil {
+	fileInfo, err := os.Stat(fPath)
+	if err != nil {
 		slog.Error("file stat error for cover", "error", err)
 		w.WriteHeader(http.StatusNotFound)
+		return nil
+	}
+	if !fileInfo.Mode().IsRegular() {
+		w.WriteHeader(http.StatusNotFound)
+		return nil
+	}
+
+	if strings.EqualFold(filepath.Ext(fPath), ".pdf") {
+		if s.PDFCovers == nil {
+			w.WriteHeader(http.StatusNotFound)
+			return nil
+		}
+
+		coverPath, err := s.PDFCovers.render(req.Context(), fPath)
+		if err != nil {
+			slog.Error("PDF cover unavailable", "path", fPath, "error", err)
+			return errPDFCoverUnavailable
+		}
+		cover, err := os.Open(coverPath)
+		if err != nil {
+			slog.Error("open PDF cover", "path", coverPath, "error", err)
+			return errPDFCoverUnavailable
+		}
+		defer cover.Close()
+		coverInfo, err := cover.Stat()
+		if err != nil {
+			slog.Error("read PDF cover information", "path", coverPath, "error", err)
+			return errPDFCoverUnavailable
+		}
+
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Cache-Control", "no-cache")
+		http.ServeContent(w, req, "cover.jpg", coverInfo.ModTime(), cover)
 		return nil
 	}
 
@@ -929,7 +1058,11 @@ func extractEpubCover(epubPath string) ([]byte, string, error) {
 func (s OPDS) makeFeed(catalog *Catalog, req *http.Request) opds.Feed {
 	feedType := navigationType
 	if catalog.Type == pathTypeDirOfFiles {
-		feedType = "application/atom+xml;profile=opds-catalog;kind=acquisition"
+		feedType = acquisitionType
+	}
+	selfURL := req.URL.Path
+	if req.URL.RawQuery != "" {
+		selfURL += "?" + req.URL.RawQuery
 	}
 
 	feedBuilder := opds.FeedBuilder.
@@ -937,9 +1070,15 @@ func (s OPDS) makeFeed(catalog *Catalog, req *http.Request) opds.Feed {
 		Title(catalog.Title).
 		Updated(TimeNow()).
 		AddLink(opds.LinkBuilder.Rel("start").Href(s.joinURL("/")).Type(navigationType).Build()).
-		AddLink(opds.LinkBuilder.Rel("self").Href(s.joinURL(req.URL.Path)).Type(feedType).Build())
+		AddLink(opds.LinkBuilder.Rel("self").Href(s.joinURL(selfURL)).Type(feedType).Build())
 
-	if req.URL.Path != "/" && req.URL.Path != "" {
+	if req.URL.Query().Get("view") == booksView {
+		feedBuilder = feedBuilder.AddLink(opds.LinkBuilder.
+			Rel("up").
+			Href(s.joinURL(req.URL.Path)).
+			Type(navigationType).
+			Build())
+	} else if req.URL.Path != "/" && req.URL.Path != "" {
 		parentPath := path.Dir(req.URL.Path)
 		if parentPath == "." {
 			parentPath = "/"
@@ -1047,16 +1186,26 @@ func (s OPDS) makeFeed(catalog *Catalog, req *http.Request) opds.Feed {
 		}
 
 		var entryPath string
-		if strings.HasPrefix(catalog.ID, "search:") {
+		if entry.Href != "" {
+			entryPath = entry.Href
+		} else if strings.HasPrefix(catalog.ID, "search:") {
 			entryPath = "/" + entry.Name
 		} else {
 			entryPath = path.Join(req.URL.Path, entry.Name)
 		}
 
-		href := s.joinURL((&url.URL{Path: entryPath}).String())
+		href := entryPath
+		if entry.Href == "" {
+			href = (&url.URL{Path: entryPath}).String()
+		}
+		href = s.joinURL(href)
 
+		entryID := entry.ID
+		if entryID == "" {
+			entryID = req.URL.Path + entry.Name
+		}
 		entryBuilder := opds.EntryBuilder.
-			ID(req.URL.Path + entry.Name).
+			ID(entryID).
 			Title(title).
 			Published(entry.ModTime.UTC()).
 			Updated(entry.ModTime.UTC()).
@@ -1083,7 +1232,7 @@ func (s OPDS) makeFeed(catalog *Catalog, req *http.Request) opds.Feed {
 			entryBuilder = entryBuilder.SeriesPosition(entry.SeriesIndex)
 		}
 
-		if s.ExtractMetadata && entry.CoverPath != "" && entry.Type == pathTypeFile {
+		if entry.CoverPath != "" && entry.Type == pathTypeFile {
 			coverURL := s.joinURL("/cover?file=" + url.QueryEscape(entryPath))
 			ext := strings.ToLower(filepath.Ext(entry.CoverPath))
 			contentType := mime.TypeByExtension(ext)
@@ -1167,15 +1316,15 @@ func (s OPDS) getType(name string, pathType int) string {
 		}
 		return mime.TypeByExtension(ext)
 	case pathTypeDirOfFiles:
-		return "application/atom+xml;profile=opds-catalog;kind=acquisition"
-	case pathTypeDirOfDirs:
+		return acquisitionType
+	case pathTypeDirOfDirs, pathTypeDirMixed:
 		return "application/atom+xml;profile=opds-catalog;kind=navigation"
 	default:
 		return mime.TypeByExtension("xml")
 	}
 }
 
-func getPathType(dirpath string) int {
+func (s OPDS) getPathType(dirpath string) int {
 	fi, err := os.Stat(dirpath)
 	if err != nil {
 		slog.Error("getPathType os.Stat error", "error", err)
@@ -1191,12 +1340,22 @@ func getPathType(dirpath string) int {
 		slog.Error("getPathType: readDir error", "error", err)
 	}
 
+	hasDirs := false
+	hasFiles := false
 	for _, entry := range dirEntries {
-		if isFile(entry) && !strings.HasPrefix(entry.Name(), hiddenFilePrefix) {
-			return pathTypeDirOfFiles
+		if fileShouldBeIgnored(entry.Name(), s.HideCalibreFiles, s.HideDotFiles) {
+			continue
+		}
+		if s.ShowCovers && (entry.Name() == "cover.jpg" || entry.Name() == "folder.jpg") {
+			continue
+		}
+		if entry.IsDir() {
+			hasDirs = true
+		} else {
+			hasFiles = true
 		}
 	}
-	return pathTypeDirOfDirs
+	return directoryType(hasDirs, hasFiles)
 }
 
 func timeNowFunc() func() time.Time {

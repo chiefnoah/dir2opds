@@ -43,9 +43,9 @@ dir2opds is ideal for anyone who wants a **self-hosted digital library** without
 - **Self-hosted OPDS ebook server** — Run your own digital library at home or on a VPS
 - **OPDS 1.2 compliant** — Works with standard ebook readers and OPDS clients
 - **No database** — Reads directly from your filesystem; no Calibre or extra setup
-- **Flexible layout** — Organize by folders; metadata from EPUB/PDF
+- **Flexible layout** — Browse folders that contain books and subfolders
 - **Search** — Optional filename search (OpenSearch)
-- **Covers** — `cover.jpg` / `folder.jpg` as catalog covers, or extract covers from EPUB files
+- **Covers** — Use catalog covers, EPUB covers, or cached PDF first-page thumbnails
 - **Web-friendly** — Optional HTML interface for browsing your collection via a web browser
 - **Pagination** — Configurable page size for large catalogs
 - **Caching** — ETag/Last-Modified for conditional requests, gzip compression
@@ -74,7 +74,7 @@ go install github.com/dubyte/dir2opds@latest
 dir2opds -dir /path/to/books -port 8080
 ```
 
-**Tip:** For best client compatibility, use folders that contain either only subfolders (navigation) or only book files (acquisition), not mixed. This keeps your self-hosted digital library well-organized and easy to browse.
+Mixed directories use separate navigation and acquisition feeds by default. Use `-koreader-mixed-feeds` to show both entry types together.
 
 ---
 
@@ -112,15 +112,51 @@ dir2opds -dir /path/to/books -port 8080
 | `-hide-dot-files` | Hide files whose names start with a dot (default: `true`) |
 | `-host` | Listen address (default: `0.0.0.0`) |
 | `-log-format` | Log format: `json` (default), `text` |
+| `-koreader-mixed-feeds` | List folders and books together in mixed directories |
 | `-mime-map` | Custom MIME types, e.g. `.mobi:application/x-mobipocket-ebook,.azw3:application/vnd.amazon.ebook` |
 | `-no-cache` | Add response headers to disable client caching |
 | `-no-pagination` | Disable pagination and show all entries in a single feed |
 | `-page-size` | Number of entries per page (default: `50`, max: `200`) |
 | `-port` | Listen port (default: `8080`) |
+| `-pdf-covers` | Render each PDF first page as an on-demand JPEG cover |
+| `-pdf-cover-cache-dir` | Store generated PDF covers in this directory (default: `./cover-cache`) |
+| `-pdf-cover-command` | Use this `pdftoppm` executable (default: `pdftoppm`) |
+| `-pdf-cover-failure-ttl` | Cache failed PDF renders for this duration (default: `5m`) |
+| `-pdf-cover-quality` | Set PDF cover JPEG quality from 1 to 100 (default: `80`) |
+| `-pdf-cover-timeout` | Set the timeout for one PDF render (default: `30s`) |
+| `-pdf-cover-width` | Set PDF cover width in pixels (default: `320`) |
+| `-pdf-cover-workers` | Limit concurrent PDF renders (default: `2`) |
 | `-search` | Enable basic filename search |
 | `-show-covers` | Use `cover.jpg` or `folder.jpg` as catalog covers (default: `true`) |
 | `-sort` | Sort entries: `name`, `date`, or `size` (default: `name`) |
 | `-url` | The base URL used for absolute links in the feed (e.g., `https://opds.example.com`) |
+
+### Mixed Directories
+
+By default, a mixed directory remains OPDS 1.2 compliant. Its navigation feed lists subfolders and a `Books in this folder` entry.
+
+Select that entry to open an acquisition feed that contains the directory's books.
+
+KOReader can process both entry types in one feed. Enable that shorter path when KOReader is the only required client:
+
+```bash
+dir2opds -dir /books -koreader-mixed-feeds
+```
+
+### PDF Covers
+
+PDF covers require Poppler's `pdftoppm` command. The container image includes it.
+
+```bash
+dir2opds \
+  -dir /books \
+  -pdf-covers \
+  -pdf-cover-cache-dir /var/cache/dir2opds
+```
+
+The server renders page one after the first cover request. It mirrors the book hierarchy under a rendering-profile directory.
+
+The server reuses a cover until the PDF size or modification time changes. Width and quality changes create a separate profile directory.
 
 ### Legacy Behavior (Pre-v1.10.0)
 

@@ -289,16 +289,21 @@ func (s OPDS) renderHTML(w http.ResponseWriter, req *http.Request, catalog *Cata
 	// Entries
 	for _, entry := range catalog.Entries {
 		var entryPath string
-		if strings.HasPrefix(catalog.ID, "search:") {
+		if entry.Href != "" {
+			entryPath = entry.Href
+		} else if strings.HasPrefix(catalog.ID, "search:") {
 			entryPath = "/" + entry.Name
 		} else {
 			entryPath = path.Join(req.URL.Path, entry.Name)
 		}
 
-		href := (&url.URL{Path: entryPath}).String()
-		
+		href := entryPath
+		if entry.Href == "" {
+			href = (&url.URL{Path: entryPath}).String()
+		}
+
 		var coverURL string
-		if s.ExtractMetadata && entry.CoverPath != "" && entry.Type == pathTypeFile {
+		if entry.CoverPath != "" && entry.Type == pathTypeFile {
 			coverURL = "/cover?file=" + url.QueryEscape(entryPath)
 		}
 

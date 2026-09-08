@@ -6,6 +6,8 @@ This document provides detailed instructions for installing `dir2opds` on variou
 
 Download binaries for Linux, macOS, Windows, and other platforms from the [Releases](https://github.com/dubyte/dir2opds/releases) page.
 
+Install Poppler's `pdftoppm` command when you enable `-pdf-covers`. The container image includes this dependency.
+
 ## Docker
 
 ```bash
