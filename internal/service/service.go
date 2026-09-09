@@ -585,7 +585,15 @@ func findEpubCover(r *zip.ReadCloser, items []struct {
 	return ""
 }
 
-func extractPdfMetadata(path string) (string, string, string, []string) {
+func extractPdfMetadata(path string) (title, author, description string, subjects []string) {
+	// rsc.io/pdf panics for unsupported features such as AES-encrypted strings.
+	defer func() {
+		if err := recover(); err != nil {
+			slog.Error("error extracting PDF metadata", "path", path, "error", err)
+			title, author, description, subjects = "", "", "", nil
+		}
+	}()
+
 	reader, err := pdf.Open(path)
 	if err != nil {
 		return "", "", "", nil
@@ -596,11 +604,10 @@ func extractPdfMetadata(path string) (string, string, string, []string) {
 		return "", "", "", nil
 	}
 
-	title := info.Key("Title").Text()
-	author := info.Key("Author").Text()
-	description := info.Key("Subject").Text()
+	title = info.Key("Title").Text()
+	author = info.Key("Author").Text()
+	description = info.Key("Subject").Text()
 
-	var subjects []string
 	if kw := info.Key("Keywords").Text(); kw != "" {
 		for _, s := range strings.Split(kw, ",") {
 			if s = strings.TrimSpace(s); s != "" {

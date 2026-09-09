@@ -128,11 +128,14 @@ func TestMixedDirectoryFeeds(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "book.pdf"), []byte("PDF"), 0o644))
 	mixed := filepath.Join(root, "section", "mixed")
 	require.NoError(t, os.MkdirAll(filepath.Join(mixed, "nested"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(mixed, "book.pdf"), []byte("PDF"), 0o644))
+	encryptedPDF, err := os.ReadFile(filepath.Join("pdf_testdata", "encrypted-aes.pdf"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(mixed, "book.pdf"), encryptedPDF, 0o644))
 
 	tests := map[string]struct {
 		url         string
 		mixed       bool
+		metadata    bool
 		contentType string
 		contains    []string
 		excludes    []string
@@ -161,11 +164,18 @@ func TestMixedDirectoryFeeds(t *testing.T) {
 			contains:    []string{`href="/section"`, `href="/book.pdf"`},
 			excludes:    []string{"Books in this folder", `view=books`},
 		},
+		"nested KOReader mixed with encrypted PDF": {
+			url:         "/section/mixed",
+			mixed:       true,
+			metadata:    true,
+			contentType: "application/atom+xml;profile=opds-catalog;kind=navigation",
+			contains:    []string{`href="/section/mixed/nested"`, `href="/section/mixed/book.pdf"`},
+		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			s := service.OPDS{TrustedRoot: root, KOReaderMixed: tc.mixed}
+			s := service.OPDS{TrustedRoot: root, KOReaderMixed: tc.mixed, ExtractMetadata: tc.metadata}
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
 

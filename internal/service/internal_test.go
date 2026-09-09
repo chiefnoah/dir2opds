@@ -134,6 +134,16 @@ func TestExtractMetadata(t *testing.T) {
 		title, author, description, subjects := extractPdfMetadata(path)
 		t.Logf("PDF Title: %q, Author: %q, Description: %q, Subjects: %v", title, author, description, subjects)
 	})
+
+	t.Run("Extract AES-encrypted PDF", func(t *testing.T) {
+		path := filepath.Join("pdf_testdata", "encrypted-aes.pdf")
+		title, author, description, subjects := extractPdfMetadata(path)
+
+		assert.Empty(t, title)
+		assert.Empty(t, author)
+		assert.Empty(t, description)
+		assert.Nil(t, subjects)
+	})
 }
 
 func TestParsePage(t *testing.T) {
