@@ -803,7 +803,7 @@ func filterDirectories(entries []CatalogEntry) []CatalogEntry {
 func buildViewURL(urlPath, view string) string {
 	query := url.Values{}
 	query.Set("view", view)
-	return urlPath + "?" + query.Encode()
+	return buildURL(urlPath, query)
 }
 
 // SearchHandler performs a basic filename search
@@ -1075,10 +1075,7 @@ func (s OPDS) makeFeed(catalog *Catalog, req *http.Request) opds.Feed {
 	if catalog.Type == pathTypeDirOfFiles {
 		feedType = acquisitionType
 	}
-	selfURL := req.URL.Path
-	if req.URL.RawQuery != "" {
-		selfURL += "?" + req.URL.RawQuery
-	}
+	selfURL := buildURL(req.URL.Path, req.URL.Query())
 
 	feedBuilder := opds.FeedBuilder.
 		ID(catalog.ID).
@@ -1090,7 +1087,7 @@ func (s OPDS) makeFeed(catalog *Catalog, req *http.Request) opds.Feed {
 	if req.URL.Query().Get("view") == booksView {
 		feedBuilder = feedBuilder.AddLink(opds.LinkBuilder.
 			Rel("up").
-			Href(s.joinURL(req.URL.Path)).
+			Href(s.joinURL(buildURL(req.URL.Path, nil))).
 			Type(navigationType).
 			Build())
 	} else if req.URL.Path != "/" && req.URL.Path != "" {
@@ -1100,7 +1097,7 @@ func (s OPDS) makeFeed(catalog *Catalog, req *http.Request) opds.Feed {
 		}
 		feedBuilder = feedBuilder.AddLink(opds.LinkBuilder.
 			Rel("up").
-			Href(s.joinURL(parentPath)).
+			Href(s.joinURL(buildURL(parentPath, nil))).
 			Type(navigationType).
 			Build())
 	}
@@ -1161,7 +1158,7 @@ func (s OPDS) makeFeed(catalog *Catalog, req *http.Request) opds.Feed {
 	if !s.NoPagination && catalog.Total > catalog.PageSize {
 		crawlableQuery := cloneURLValues(req.URL.Query())
 		crawlableQuery.Set("complete", "true")
-		crawlableURL := req.URL.Path + "?" + crawlableQuery.Encode()
+		crawlableURL := buildURL(req.URL.Path, crawlableQuery)
 		feedBuilder = feedBuilder.AddLink(opds.LinkBuilder.
 			Rel("http://opds-spec.org/crawlable").
 			Href(s.joinURL(crawlableURL)).
@@ -1180,7 +1177,7 @@ func (s OPDS) makeFeed(catalog *Catalog, req *http.Request) opds.Feed {
 		for _, opt := range sortOptions {
 			facetQuery := cloneURLValues(query)
 			facetQuery.Set("sort", opt.value)
-			facetURL := basePath + "?" + facetQuery.Encode()
+			facetURL := buildURL(basePath, facetQuery)
 			facetBuilder := opds.LinkBuilder.
 				Rel("http://opds-spec.org/facet").
 				Href(s.joinURL(facetURL)).
@@ -1280,7 +1277,11 @@ func (s OPDS) makeFeed(catalog *Catalog, req *http.Request) opds.Feed {
 
 func buildPageURL(basePath string, query url.Values, page int) string {
 	query.Set("page", strconv.Itoa(page))
-	return basePath + "?" + query.Encode()
+	return buildURL(basePath, query)
+}
+
+func buildURL(urlPath string, query url.Values) string {
+	return (&url.URL{Path: urlPath, RawQuery: query.Encode()}).String()
 }
 
 func fileShouldBeIgnored(filename string, hideCalibreFiles, hideDotFiles bool) bool {

@@ -198,6 +198,26 @@ func TestMixedDirectoryFeeds(t *testing.T) {
 	}
 }
 
+func TestFeedLinksEscapeSpaces(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "section with space")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "book.pdf"), []byte("PDF"), 0o644))
+
+	s := service.OPDS{TrustedRoot: root}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/section%20with%20space", nil)
+
+	err := s.Handler(w, req)
+	require.NoError(t, err)
+	body := w.Body.String()
+
+	assert.Contains(t, body, `rel="self" href="/section%20with%20space"`)
+	assert.Contains(t, body, `href="/section%20with%20space?sort=name"`)
+	assert.Contains(t, body, `href="/section%20with%20space?view=books"`)
+	assert.NotContains(t, body, `href="/section with space`)
+}
+
 func TestBaseURL(t *testing.T) {
 	s := service.OPDS{
 		TrustedRoot: "testdata",
