@@ -928,6 +928,14 @@ func (s OPDS) CoverHandler(w http.ResponseWriter, req *http.Request) error {
 
 	// verifyPath avoid the http transversal by checking the path is under TrustedRoot
 	_, err = verifyPath(fPath, s.TrustedRoot)
+	if err != nil && strings.Contains(urlPath, " ") {
+		plusPath := strings.ReplaceAll(urlPath, " ", "+")
+		plusFPath := filepath.Join(s.TrustedRoot, plusPath)
+		if _, plusErr := verifyPath(plusFPath, s.TrustedRoot); plusErr == nil {
+			fPath = plusFPath
+			err = nil
+		}
+	}
 	if err != nil {
 		slog.Error("verify path error for cover", "error", err)
 		w.WriteHeader(http.StatusNotFound)
@@ -1380,7 +1388,6 @@ func verifyPath(path, trustedRoot string) (string, error) {
 	// get the canonical path
 	r, err := filepath.EvalSymlinks(c)
 	if err != nil {
-		slog.Error("verifyPath error", "error", err)
 		return c, errors.New("unsafe or invalid path specified")
 	}
 

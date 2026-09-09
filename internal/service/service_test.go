@@ -1,6 +1,8 @@
 package service_test
 
 import (
+	"archive/zip"
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -496,6 +498,32 @@ func TestContentRange(t *testing.T) {
 		resp := w.Result()
 		assert.Equal(t, http.StatusRequestedRangeNotSatisfiable, resp.StatusCode)
 	})
+}
+
+func TestCoverPathWithPlus(t *testing.T) {
+	root := t.TempDir()
+	var epub bytes.Buffer
+	archive := zip.NewWriter(&epub)
+	opf, err := archive.Create("content.opf")
+	require.NoError(t, err)
+	_, err = opf.Write([]byte(`<package><manifest><item id="cover" href="cover.png" media-type="image/png"/></manifest></package>`))
+	require.NoError(t, err)
+	cover, err := archive.Create("cover.png")
+	require.NoError(t, err)
+	_, err = cover.Write([]byte("cover"))
+	require.NoError(t, err)
+	require.NoError(t, archive.Close())
+
+	err = os.WriteFile(filepath.Join(root, "book+name.epub"), epub.Bytes(), 0o644)
+	require.NoError(t, err)
+
+	s := service.OPDS{TrustedRoot: root}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/cover?file=%2Fbook+name.epub", nil)
+
+	err = s.CoverHandler(w, req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestCrawlableFeed(t *testing.T) {
